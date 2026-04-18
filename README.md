@@ -8,6 +8,7 @@
 - 基于 Markdown 知识库的 RAG 检索
 - OpenAI / 通义千问双模型适配
 - 启动时自动导入知识库向量
+- 智能工具调用（地图搜索等）
 
 ## 技术栈
 
@@ -41,6 +42,7 @@ python main.py
 - `DASHSCOPE_API_KEY` / `QWEN_MODEL` / `QWEN_EMBEDDING_MODEL`
 - `VECTOR_DIMENSION`：向量维度，需要与 embedding 模型输出维度一致
 - `KNOWLEDGE_DOCS_DIR`：知识库 Markdown 目录，默认是 `docs`
+- `BAIDU_MAP_AK`：百度地图 API 密钥（用于地点搜索功能）
 
 如果使用千问，必须把 `DASHSCOPE_API_KEY` 改成真实值，否则启动时知识库向量导入会失败。
 
@@ -61,7 +63,8 @@ controller -> services -> dao -> entity
 - `services`：业务逻辑层，负责聊天、RAG、向量导入、模型调用
 - `dao`：数据库访问层，负责 ORM 查询与持久化
 - `entity`：数据库表映射
-- `harness`：LangGraph、Prompt 拼装、调用链编排
+- `harness`：LangGraph、Prompt 拼装、调用链编排、工具集成
+- `tools`：外部工具模块（百度地图搜索等）
 - `common`：通用返回体、异常、常量、工具函数
 - `config`：配置、数据库连接、日志初始化
 
@@ -162,13 +165,13 @@ controller -> services -> dao -> entity
 ### `harness/`
 
 - [`harness/graph_builder.py`](D:/lhb_work/py_charm_work/LoveGuruAgent/harness/graph_builder.py:1)
-  LangGraph 图定义。当前只有一个 `generate_reply` 节点。
+  LangGraph 图定义。包含 Agent 节点、Tool Node、工具结果处理节点，支持 LLM 自主决策是否调用工具。
 
 - [`harness/chain_builder.py`](D:/lhb_work/py_charm_work/LoveGuruAgent/harness/chain_builder.py:1)
-  把“检索 -> Prompt 拼装 -> 模型生成”串成一条链。
+  把"检索 -> Prompt 拼装 -> 模型生成"串成一条链。包含智能地址提取和地点类型识别逻辑。
 
 - [`harness/prompt_manager.py`](D:/lhb_work/py_charm_work/LoveGuruAgent/harness/prompt_manager.py:1)
-  把知识库引用内容和用户问题拼成最终 Prompt。
+  把知识库引用内容、工具搜索结果和用户问题拼成最终 Prompt。
 
 ### `docs/`
 
@@ -180,7 +183,11 @@ controller -> services -> dao -> entity
 
 ### `tools/`
 
-预留工具模块目录，当前包含日期、情绪、聊天相关工具代码，但未接入主聊天链路。
+外部工具模块目录：
+- `baidu_map_tool.py`：百度地图搜索工具，支持地点搜索（餐厅、酒店、银行等20+种POI类型）
+- `date_tool.py`：日期相关工具
+- `emotion_tool.py`：情绪分析工具
+- `chat_tool.py`：聊天辅助工具
 
 ## 当前接口
 
@@ -219,9 +226,11 @@ controller -> services -> dao -> entity
 2. Controller 调用 [`ChatService.chat`](D:/lhb_work/py_charm_work/LoveGuruAgent/services/chat/chat_service.py:16)
 3. `ChatService` 先把用户消息写入 `t_ai_chat_message`
 4. `ChatService` 调用 LangGraph：[`build_chat_graph()`](D:/lhb_work/py_charm_work/LoveGuruAgent/harness/graph_builder.py:16)
-5. 图中的 `generate_reply` 节点执行 [`ChatChainBuilder.run`](D:/lhb_work/py_charm_work/LoveGuruAgent/harness/chain_builder.py:11)
-6. `ChatChainBuilder` 先调用 [`RAGService.retrieve`](D:/lhb_work/py_charm_work/LoveGuruAgent/services/chat/rag_service.py:10) 检索知识库
-7. 检索结果交给 [`PromptManager.build_chat_prompt`](D:/lhb_work/py_charm_work/LoveGuruAgent/harness/prompt_manager.py:5) 组装 Prompt
+5. 图中的 `agent` 节点判断是否需要调用工具
+   - **需要工具**：执行 `tools` 节点 → `tools_result` 节点处理结果 → 生成回复
+   - **不需要工具**：执行 `generate_reply` 节点（RAG流程）→ 生成回复
+6. `ChatChainBuilder` 调用 [`RAGService.retrieve`](D:/lhb_work/py_charm_work/LoveGuruAgent/services/chat/rag_service.py:10) 检索知识库
+7. 检索结果和工具结果交给 [`PromptManager`](D:/lhb_work/py_charm_work/LoveGuruAgent/harness/prompt_manager.py:1) 组装 Prompt
 8. 通过 [`services/llm/factory.py`](D:/lhb_work/py_charm_work/LoveGuruAgent/services/llm/factory.py:6) 选择具体模型服务
 9. 调用模型生成回复
 10. AI 回复写入 `t_ai_chat_message`
@@ -281,10 +290,12 @@ controller -> services -> dao -> entity
 POST /api/v1/chat/send
   -> ChatController.send_message
   -> ChatService.chat
-  -> LangGraph(generate_reply)
-  -> ChatChainBuilder.run
+  -> LangGraph(agent)
+  -> [条件路由]
+     ├─ 需要工具 -> ToolNode -> tools_result -> ChatChainBuilder.run
+     └─ 不需要工具 -> ChatChainBuilder.run
   -> RAGService.retrieve
-  -> PromptManager.build_chat_prompt
+  -> PromptManager.build_chat_prompt / build_chat_prompt_with_tools
   -> LLM Factory(get_llm_service)
   -> OpenAIService.invoke / QwenService.invoke
   -> 返回模型回复
@@ -354,17 +365,65 @@ POST /api/v1/chat/send
 用途：
 - RAG 相似度检索
 
+## 工具调用机制
+
+### 地图搜索工具
+
+项目已集成百度地图搜索工具，支持智能地点搜索。
+
+**支持的地点类型（20+种）：**
+- 餐饮类：餐厅、咖啡厅、酒吧、快餐
+- 生活服务：酒店、超市、银行、加油站、医院、学校
+- 休闲娱乐：电影院、KTV、公园、健身房、图书馆
+- 交通设施：地铁站、公交站、停车场
+- 政务服务：政府、邮局
+
+**智能地址提取：**
+- 支持完整地址："XX市XX区XX路/街/道"
+- 支持行政区划："XX市XX区"、"XX市XX县"
+- 支持地标建筑："XX小区"、"XX大厦"、"XX商场"
+- 支持交通枢纽："XX地铁站"、"XX公交站"
+
+**使用示例：**
+```json
+{
+  "conversation_id": "test-001",
+  "message": "北京市朝阳区附近找餐厅"
+}
+```
+
+系统会自动：
+1. 识别用户意图（找餐厅）
+2. 提取地址信息（北京市朝阳区）
+3. 调用百度地图API搜索
+4. 将搜索结果整合到回复中
+
+### 工具调用流程
+
+```text
+用户消息
+  -> Agent节点（LLM决策）
+  -> 是否需要工具？
+     ├─ 是 -> ToolNode执行 -> 工具结果处理 -> 生成回复
+     └─ 否 -> RAG流程 -> 生成回复
+```
+
 ## 当前实现特点
 
-- 当前 LangGraph 只有一个节点，结构简单，适合后续扩展多节点流程
-- 当前 RAG 是“整篇文档召回后直接拼 Prompt”，还没有做 chunk 切分
-- 当前 `tools/` 目录下的工具尚未接入主链路
+- LangGraph 采用多节点架构：Agent、ToolNode、工具结果处理、常规回复
+- 支持 LLM 自主决策是否调用工具（LangGraph Tool机制）
+- 智能地址提取：5层地址识别策略，覆盖各种表达习惯
+- 丰富的POI类型：20+种地点类型，每种支持多个同义词
+- 当前 RAG 是"整篇文档召回后直接拼 Prompt"，还没有做 chunk 切分
 - 聊天接口已经走后端 RAG，不是纯模型直连
+- 百度地图工具已完全接入主链路
 
 ## 后续可扩展方向
 
 - 增加文档切片与分段向量化
 - 增加多轮记忆摘要
-- 增加工具调用节点
+- 增加更多工具（天气查询、日程管理等）
 - 增加模型路由和降级策略
 - 增加单元测试和接口测试
+- 支持坐标定位（经纬度）搜索
+- 增加工具调用的日志和监控

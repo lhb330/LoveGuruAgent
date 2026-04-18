@@ -22,6 +22,11 @@ class QwenService(BaseLLMService):
             return payload["output"]["choices"][0]["message"]["content"]
         except Exception as exc:
             raise LLMInvokeException(str(exc)) from exc
+    
+    def get_llm(self):
+        """DashScope不支持LangChain工具绑定,返回None"""
+        # TODO: 如果需要使用LangChain工具,建议使用OpenAI兼容接口
+        raise NotImplementedError("DashScope API does not support LangChain tool binding. Please use OpenAI-compatible API instead.")
 
     def embed_text(self, text: str) -> list[float]:
         try:

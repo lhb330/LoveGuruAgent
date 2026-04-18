@@ -24,6 +24,10 @@ class OpenAIService(BaseLLMService):
             return self.chat_model.invoke(prompt).content
         except Exception as exc:
             raise LLMInvokeException(str(exc)) from exc
+    
+    def get_llm(self):
+        """获取底层ChatOpenAI实例"""
+        return self.chat_model
 
     def embed_text(self, text: str) -> list[float]:
         try:
