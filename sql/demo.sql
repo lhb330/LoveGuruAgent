@@ -19,6 +19,7 @@ COMMENT ON COLUMN public.t_ai_chat_message."role" IS '角色：user、assistant�
 COMMENT ON COLUMN public.t_ai_chat_message.create_time IS '创建时间';
 
 
+-- 安装vector插件postgresql: https://github.com/pgvector/pgvector
 
 -- 1. 先检查扩展是否在系统层面可见
 SELECT name, default_version FROM pg_available_extensions WHERE name = 'vector';
@@ -34,7 +35,7 @@ CREATE TABLE public.t_knowledge_embedding (
 	doc_name varchar(255) NULL, -- 文件名称
 	"content" text NULL, -- 文件切片内容
 	metadata json NULL, -- 元数据
-	embedding public.vector(1024) NULL, -- 向量(用的是阿里)
+	embedding public.vector(1024) NULL, -- 向量(用的是阿里向量模型)
 	CONSTRAINT t_knowledge_embedding_pkey PRIMARY KEY (id)
 );
 CREATE INDEX t_knowledge_embedding_index ON public.t_knowledge_embedding USING hnsw (embedding vector_cosine_ops);

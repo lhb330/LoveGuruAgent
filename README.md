@@ -185,9 +185,6 @@ controller -> services -> dao -> entity
 
 外部工具模块目录：
 - `baidu_map_tool.py`：百度地图搜索工具，支持地点搜索（餐厅、酒店、银行等20+种POI类型）
-- `date_tool.py`：日期相关工具
-- `emotion_tool.py`：情绪分析工具
-- `chat_tool.py`：聊天辅助工具
 
 ## 当前接口
 
@@ -216,7 +213,7 @@ controller -> services -> dao -> entity
 ```json
 {
   "conversation_id": "test-001",
-  "message": "我刚分手，很难受，怎么调整？"
+  "message": "终于谈恋爱了，超开心，想知道怎么更好地相处。"
 }
 ```
 
