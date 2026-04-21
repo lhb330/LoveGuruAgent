@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(alias="OPENAI_API_KEY")
     openai_base_url: str = Field(alias="OPENAI_BASE_URL")
     openai_model: str = Field(alias="OPENAI_MODEL")
+    openai_embedding_model: str = Field(alias="OPENAI_EMBEDDING_MODEL")
 
     dashscope_api_key: str = Field(alias="DASHSCOPE_API_KEY")
     qwen_model: str = Field(alias="QWEN_MODEL")

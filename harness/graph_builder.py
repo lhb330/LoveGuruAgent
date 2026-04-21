@@ -171,11 +171,48 @@ def build_chat_graph():
             "references": references,
         }
     
+    def generate_reply_stream(state: ChatState) -> ChatState:
+        """流式回复节点（不使用工具）
+        
+        使用RAG检索和LLM流式生成回复，不调用外部工具。
+        支持逐字输出效果。
+        
+        Args:
+            state: 当前聊天状态
+            
+        Returns:
+            ChatState: 更新后的状态（包含回复和参考文档）
+        """
+        # 获取RAG参考
+        references = chain.rag_service.retrieve(state["user_message"])
+        
+        # 构建提示词
+        prompt = PromptManager.build_chat_prompt(
+            state["user_message"], 
+            references
+        )
+        
+        # 流式调用LLM
+        llm_service = get_llm_service()
+        llm = llm_service.get_llm()
+        
+        # 使用流式调用
+        full_response = ""
+        for chunk in llm.stream(prompt):
+            if chunk.content:
+                full_response += chunk.content
+        
+        return {
+            "assistant_reply": full_response,
+            "references": references,
+        }
+    
     # 添加节点
     builder.add_node("agent", agent_node)
     builder.add_node("tools", tool_node)
     builder.add_node("tools_result", tools_result_node)
     builder.add_node("generate_reply", generate_reply)
+    builder.add_node("generate_reply_stream", generate_reply_stream)
     
     # 设置入口点
     builder.set_entry_point("agent")
@@ -186,7 +223,7 @@ def build_chat_graph():
         should_use_tools,
         {
             "tools": "tools",
-            "no_tools": "generate_reply"
+            "no_tools": "generate_reply_stream"  # 使用流式节点
         }
     )
     
@@ -195,6 +232,6 @@ def build_chat_graph():
     
     # 结束节点
     builder.add_edge("tools_result", END)
-    builder.add_edge("generate_reply", END)
+    builder.add_edge("generate_reply_stream", END)
     
     return builder.compile()
