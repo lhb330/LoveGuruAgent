@@ -3,11 +3,12 @@
 提供PostgreSQL向量数据库的管理和操作功能。
 包括知识库文档导入、向量生成、数据库初始化等。
 """
-import json
 import logging
 from pathlib import Path
 
 from sqlalchemy import text
+
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from common.exceptions import LLMInvokeException
 from common.utils import read_text_file
@@ -35,70 +36,44 @@ class PGVectorService:
     """
     
     def __init__(self) -> None:
-        """初始化pgvector服务
-        
-        获取配置和LLM服务实例。
-        """
         self.settings = get_settings()
         self.llm_service = get_llm_service()
 
-    def ensure_database(self) -> None:
-        """确保数据库扩展和表已创建
-        
-        创建pgvector扩展（如果不存在），并创建所有ORM定义的表。
-        在应用启动时调用。
-        """
-        with engine.begin() as connection:
-            connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        Base.metadata.create_all(bind=engine)
 
     def split_text(self, text: str, chunk_size: int = 500, overlap: int = 100) -> list[str]:
-        """将文本按字符长度切片，支持重叠
+        """使用语义切片分割文本
         
-        将长文本切分为多个小块，每个小块有固定大小的重叠部分，
-        确保上下文信息不丢失。
+        使用LangChain的RecursiveCharacterTextSplitter进行语义切片，
+        优先在段落、句子等语义边界处分割，保持文本的完整性。
         
         Args:
-            text: 要切片的原始文本
-            chunk_size: 每个切片的大小（字符数），默认500
-            overlap: 相邻切片的重叠大小（字符数），默认100
+            text: 要分割的文本
+            chunk_size: 每个片段的最大字符数
+            overlap: 相邻片段之间的重叠字符数
             
         Returns:
-            list[str]: 切片后的文本列表
-            
-        Example:
-            >>> split_text("ABCDEFG", chunk_size=3, overlap=1)
-            ['ABC', 'CDE', 'EFG']
+            分割后的文本片段列表
         """
-        chunks = []
-        start = 0
-        text_length = len(text)
-
-        while start < text_length:
-            end = start + chunk_size
-            chunk = text[start:end]
-            chunks.append(chunk)
-            start += chunk_size - overlap
-
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=overlap,
+            length_function=len,
+            separators=[
+                "\n\n",      # 段落分隔
+                "\n",        # 换行
+                "。", "！", "？",  # 中文句子结束符
+                ".", "!", "?",   # 英文句子结束符
+                "；", ";",       # 分号
+                "，", ",",       # 逗号
+                " ",            # 空格
+                ""              # 字符级别
+            ]
+        )
+        
+        chunks = splitter.split_text(text)
         return chunks
 
     def rebuild_from_docs(self) -> dict:
-        """从文档目录重建向量索引
-        
-        扫描docs目录下的所有Markdown文档，执行以下操作：
-        1. 读取文档内容
-        2. 按字符长度切片
-        3. 为每个切片生成embedding向量
-        4. 保存到数据库
-        
-        Returns:
-            dict: 包含导入统计信息的字典
-                - imported: 导入的切片数量
-                - docs_dir: 文档目录路径
-                
-        Raises:
-            Exception: 数据库操作或embedding生成失败时抛出
-        """
         docs = self._scan_docs()
         with SessionLocal() as session:
             dao = KnowledgeEmbeddingDAO(session)
@@ -144,66 +119,30 @@ class PGVectorService:
         }
 
     def _scan_docs(self) -> list[Path]:
-        """扫描知识库目录，获取所有Markdown文件
-        
-        Returns:
-            list[Path]: Markdown文件路径列表，按文件名排序
-        """
         docs_dir = self.settings.knowledge_docs_path
         docs_dir.mkdir(parents=True, exist_ok=True)
         return sorted(docs_dir.glob("*.md"))
 
 
 class VectorBootstrapService:
-    """向量数据库引导服务类
-    
-    在应用启动时自动初始化向量数据库。
-    检查向量表是否有数据，如果没有则自动导入文档。
-    
-    Attributes:
-        vector_service: pgvector服务实例
-    """
-    
     def __init__(self) -> None:
-        """初始化引导服务
-        
-        创建pgvector服务实例。
-        """
         self.vector_service = PGVectorService()
 
     def vectorTableHasData(self) -> bool:
-        """检查向量表是否已有数据
-        
-        Returns:
-            bool: 如果表中有数据返回True，否则返回False
-        """
         with SessionLocal() as session:
             dao = KnowledgeEmbeddingDAO(session)
             return dao.has_data()
 
     def initialize(self) -> None:
         """初始化向量数据库
-        
         应用启动时的引导流程：
         1. 检查向量表是否已有数据
         2. 如果有数据，跳过初始化
         3. 如果没有数据，创建数据库扩展和表
         4. 扫描文档目录，导入所有Markdown文档
-        
-        Note:
-            - 如果文档目录为空，跳过初始化
-            - 如果embedding服务不可用，记录错误但不阻止应用启动
-            - 其他异常会记录完整堆栈信息
         """
         if self.vectorTableHasData():
             logger.info("Vector table already has data, skip bootstrap.")
-            return
-
-        self.vector_service.ensure_database()
-        docs = self.vector_service._scan_docs()
-
-        if not docs:
-            logger.warning("No markdown documents found in docs directory, skip vector bootstrap.")
             return
 
         try:

@@ -31,39 +31,17 @@ class ChatRequest(BaseModel):
 
 class ChatService:
     """聊天服务类
-    
     处理聊天相关的核心业务逻辑：
     1. 保存用户消息
     2. 调用LangGraph生成AI回复
     3. 保存AI回复
     4. 查询聊天历史
     5. 清空会话记录
-    
-    Attributes:
-        graph: LangGraph编译后的图对象，用于执行聊天流程
     """
-    
     def __init__(self) -> None:
         self.graph = build_chat_graph()
 
     def chat(self, request: ChatRequest) -> dict:
-        """处理聊天请求
-        
-        完整的聊天流程：
-        1. 保存用户消息到数据库
-        2. 调用LangGraph生成回复（包括RAG检索和工具调用）
-        3. 保存AI回复到数据库
-        4. 返回回复和参考文档
-        
-        Args:
-            request: 聊天请求对象
-            
-        Returns:
-            dict: 包含conversation_id、reply、references的字典
-            
-        Raises:
-            Exception: 数据库操作或AI调用失败时抛出异常
-        """
         with SessionLocal() as session:
             dao = ChatMessageDAO(session)
             try:
