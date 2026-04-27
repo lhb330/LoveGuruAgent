@@ -3,12 +3,13 @@
 基于 FastAPI + LangGraph + pgvector 的恋爱咨询 AI 后端项目。
 
 项目提供：
-- 聊天接口
+- 聊天接口（支持流式 SSE 输出）
 - 聊天历史持久化
 - 基于 Markdown 知识库的 RAG 检索
 - OpenAI / 通义千问双模型适配
 - 启动时自动导入知识库向量
 - 智能工具调用（地图搜索等）
+- **长期记忆管理**（自动提取用户关键信息并跨会话使用）
 
 ## 技术栈
 
@@ -43,6 +44,8 @@ python main.py
 - `VECTOR_DIMENSION`：向量维度，需要与 embedding 模型输出维度一致
 - `KNOWLEDGE_DOCS_DIR`：知识库 Markdown 目录，默认是 `docs`
 - `BAIDU_MAP_AK`：百度地图 API 密钥（用于地点搜索功能）
+- `ENABLE_LONG_MEMORY`：是否启用长期记忆功能，默认 `true`
+- `LONG_MEMORY_MAX_ENTRIES`：单个用户最大记忆数量，默认 `100`
 
 如果使用千问，必须把 `DASHSCOPE_API_KEY` 改成真实值，否则启动时知识库向量导入会失败。
 
@@ -128,6 +131,9 @@ controller -> services -> dao -> entity
 - [`entity/knowledge_embedding.py`](D:/lhb_work/py_charm_work/LoveGuruAgent/entity/knowledge_embedding.py:1)
   知识库向量表映射，对应 `t_knowledge_embedding`。
 
+- [`entity/user_memory.py`](D:/lhb_work/py_charm_work/LoveGuruAgent/entity/user_memory.py:1)
+  用户长期记忆表映射，对应 `t_user_memory`。
+
 ### `dao/`
 
 - [`dao/chat_message_dao.py`](D:/lhb_work/py_charm_work/LoveGuruAgent/dao/chat_message_dao.py:1)
@@ -136,12 +142,22 @@ controller -> services -> dao -> entity
 - [`dao/knowledge_embedding_dao.py`](D:/lhb_work/py_charm_work/LoveGuruAgent/dao/knowledge_embedding_dao.py:1)
   向量数据的保存、清空、相似度检索。
 
+- [`dao/user_memory_dao.py`](D:/lhb_work/py_charm_work/LoveGuruAgent/dao/user_memory_dao.py:1)
+  用户长期记忆的增删改查、按重要度检索、记忆淘汰。
+
 ### `services/`
 
 #### `services/chat/`
 
 - [`services/chat/chat_service.py`](D:/lhb_work/py_charm_work/LoveGuruAgent/services/chat/chat_service.py:1)
-  聊天主流程：保存用户消息、调用图编排、保存 AI 回复、返回引用文档。
+  聊天主流程：保存用户消息、调用图编排、保存 AI 回复、返回引用文档。**对话结束后异步提取长期记忆**。
+  
+  **核心功能**：
+  - 同步/流式聊天接口（支持 SSE 打字机效果）
+  - LangGraph 图调用（带重试机制，最多3次）
+  - 异步记忆提取（后台线程，不影响响应速度）
+  - 人工审批恢复（敏感词拦截场景）
+  - 断点续传（checkpointer 状态恢复）
 
 - [`services/chat/rag_service.py`](D:/lhb_work/py_charm_work/LoveGuruAgent/services/chat/rag_service.py:1)
   RAG 检索服务：把问题转 embedding，再到 pgvector 中做相似度查询。
@@ -161,6 +177,17 @@ controller -> services -> dao -> entity
 
 - [`services/vector/pgvector_service.py`](D:/lhb_work/py_charm_work/LoveGuruAgent/services/vector/pgvector_service.py:1)
   知识库向量导入、数据库扩展初始化、启动时向量构建。
+
+#### `services/memory/`
+
+- [`services/memory/memory_service.py`](D:/lhb_work/py_charm_work/LoveGuruAgent/services/memory/memory_service.py:1)
+  长期记忆管理：记忆提取、检索、存储、淘汰。
+  
+  **核心功能**：
+  - **记忆提取**：使用 LLM 从对话中提取用户关键信息（偏好、关系状态、重要事件等）
+  - **隐含信息推断**：从用户问题中推断隐含状态（如"第一次约会"→推测用户单身）
+  - **记忆检索**：对话开始时加载用户长期记忆，注入 Prompt 提供个性化回复
+  - **记忆淘汰**：按重要度评分自动清理低价值记忆，保持记忆库精简
 
 ### `harness/`
 
@@ -192,11 +219,40 @@ controller -> services -> dao -> entity
 
 - `GET /api/v1/health/`
 
-### 聊天接口
+### 聊天接口（同步）
 
 - `POST /api/v1/chat/send`
 - `GET /api/v1/chat/history/{conversation_id}`
+- `GET /api/v1/chat/history/all`（获取所有消息）
+- `GET /api/v1/chat/history/grouped`（按会话分组）
 - `DELETE /api/v1/chat/{conversation_id}`
+
+### 聊天接口（流式 SSE）
+
+- `POST /api/v1/chat/send-stream`
+
+**请求示例**：
+```json
+{
+  "conversation_id": "conv-20260427-42",
+  "message": "第一次约会需要注意什么？",
+  "user_id": "test_user_001"
+}
+```
+
+**SSE 响应格式**：
+```
+data: {"content": "第一次", "done": false}
+
+data: {"content": "约会时", "done": false}
+
+data: {"content": "", "done": true, "references": []}
+```
+
+### 人工审批与断点续传
+
+- `POST /api/v1/chat/approve`（人工审批敏感词拦截）
+- `POST /api/v1/chat/resume/{conversation_id}`（断点续传恢复）
 
 ### 向量接口
 
@@ -405,6 +461,90 @@ POST /api/v1/chat/send
      └─ 否 -> RAG流程 -> 生成回复
 ```
 
+## 长期记忆机制
+
+### 记忆提取流程
+
+系统会在每次对话结束后，**异步**提取用户的关键信息并存储到长期记忆库：
+
+```
+对话结束
+   │
+   ▼
+┌──────────────────────────────────────────────┐
+│ 异步记忆提取（后台线程）                       │
+│                                              │
+│ 1. 组装对话文本:                              │
+│    "用户: {message}\nAI: {reply}"            │
+│                                              │
+│ 2. 调用 LLM 提取记忆:                         │
+│    - 直接信息: "我今年25岁"                   │
+│    - 隐含推断: "第一次约会"→单身（推测）       │
+│    - 重要度评分: 0.0~1.0                      │
+│                                              │
+│ 3. 保存到 t_user_memory:                      │
+│    - user_id, memory_key, memory_value        │
+│    - importance, source_conversation_id       │
+│                                              │
+│ 4. 淘汰低重要度记忆:                          │
+│    - 超过 max_entries 时清理                  │
+│    - 优先保留高重要度记忆                      │
+└──────────────────────────────────────────────┘
+```
+
+### 记忆使用流程
+
+在下一次对话开始时，系统会自动加载用户的长期记忆并注入 Prompt：
+
+```
+用户发送消息
+   │
+   ▼
+┌──────────────────────────────────────────────┐
+│ MemoryService.get_user_memories()            │
+│                                              │
+│ 1. 查询 t_user_memory:                        │
+│    - 按 user_id 过滤                          │
+│    - importance >= 0.3                        │
+│    - 最多返回 100 条                          │
+│                                              │
+│ 2. 格式化记忆文本:                            │
+│    "## 用户长期记忆"                          │
+│    "- [关系状态] 单身（推测）"                 │
+│    "- [年龄] 25岁"                            │
+│                                              │
+│ 3. 注入系统 Prompt:                           │
+│    系统提示词 + 长期记忆 + 知识库 + 用户问题   │
+└──────────────────────────────────────────────┘
+```
+
+### 记忆提取规则
+
+**重要度评分标准**：
+- `1.0`: 核心身份信息（姓名、性别、年龄）
+- `0.9`: 重要关系信息（伴侣、婚姻状态）
+- `0.8`: 关键偏好和价值观
+c- `0.7`: 重要经历和事件、当前状态（如"准备第一次约会"）
+- `0.6`: 日常偏好和习惯、关注的话题领域
+c- `0.5`: 一般性信息、可能的兴趣点（标注为推测）
+
+**隐含信息推断示例**：
+- 用户问"第一次约会" → 推断"用户正在准备第一次约会"（重要度 0.7）
+- 用户问"如何哄老婆开心" → 推断"用户已婚"（重要度 0.9）
+- 用户问"如何挽回前女友" → 推断"用户刚分手"（重要度 0.8）
+
+### 记忆数据表结构
+
+**`t_user_memory` 表**：
+- `id`: 主键
+- `user_id`: 用户标识
+c- `memory_key`: 记忆类别（如"年龄"、"关系状态"）
+- `memory_value`: 记忆内容
+c- `importance`: 重要度（0.0~1.0）
+- `source_conversation_id`: 来源会话ID
+c- `create_time`: 创建时间
+c- `update_time`: 更新时间
+
 ## 当前实现特点
 
 - LangGraph 采用多节点架构：Agent、ToolNode、工具结果处理、常规回复
@@ -414,16 +554,20 @@ POST /api/v1/chat/send
 - 当前 RAG 是"整篇文档召回后直接拼 Prompt"，还没有做 chunk 切分
 - 聊天接口已经走后端 RAG，不是纯模型直连
 - 百度地图工具已完全接入主链路
+- **长期记忆已实现完整生命周期**：提取→存储→检索→淘汰
+- 记忆提取支持隐含信息推断，从用户问题中推测状态
 
 ## 后续可扩展方向
 
+- [x] ~~增加多轮记忆摘要~~（已完成：长期记忆功能）
 - 增加文档切片与分段向量化
-- 增加多轮记忆摘要
 - 增加更多工具（天气查询、日程管理等）
 - 增加模型路由和降级策略
 - 增加单元测试和接口测试
 - 支持坐标定位（经纬度）搜索
 - 增加工具调用的日志和监控
+- 记忆提取优化：积累多轮对话后再提取（而非单次对话）
+- 增加记忆可视化查看/编辑接口
 
 ## 完整项目架构图
 
@@ -693,6 +837,7 @@ Entry → Agent Node (更新 messages, assistant_reply)
 | **编排层** | LangGraph | Agent 工作流、状态管理、工具调用 |
 | **ORM** | SQLAlchemy | 数据库访问、对象关系映射 |
 | **数据库** | PostgreSQL + pgvector | 关系数据 + 向量存储 |
-| **LLM** | OpenAI / DashScope(Qwen) | 聊天生成、Embedding |
+| **LLM** | OpenAI / DashScope(Qwen) | 聊天生成、Embedding、记忆提取 |
 | **配置** | pydantic-settings | 环境变量管理 |
 | **工具** | 百度地图 API | POI 搜索、附近推荐 |
+| **记忆服务** | MemoryService | 长期记忆提取、检索、淘汰 |
