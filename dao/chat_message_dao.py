@@ -3,6 +3,7 @@
 提供ChatMessage实体的数据库操作方法，包括保存、查询、删除等。
 """
 from collections.abc import Sequence
+from typing import List
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -21,6 +22,7 @@ class ChatMessageDAO(BaseDAO):
         message_type: str,
         content: str,
         role: str,
+        user_id: str,
     ) -> ChatMessage:
         """保存单条聊天消息"""
         message = ChatMessage(
@@ -28,6 +30,7 @@ class ChatMessageDAO(BaseDAO):
             message_type=message_type,
             content=content,
             role=role,
+            user_id=user_id
         )
         self.session.add(message)
         self.flush()
@@ -147,3 +150,11 @@ class ChatMessageDAO(BaseDAO):
         result.sort(key=lambda x: x['create_time'] or '', reverse=True)
         
         return result
+
+    def get_user_messages_by_user_id(self, user_id: str) -> List[ChatMessage]:
+        """根据 user_id 获取该用户的所有用户消息（role='user'）"""
+        stmt = select(ChatMessage).where(
+            ChatMessage.user_id == user_id,
+            ChatMessage.role == "user"
+        ).order_by(ChatMessage.create_time.asc())
+        return self.session.execute(stmt).scalars().all()

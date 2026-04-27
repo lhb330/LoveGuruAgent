@@ -37,3 +37,4 @@ class ChatMessage(Base):
         nullable=False, 
         comment="创建时间"
     )
+    user_id: Mapped[str] = mapped_column(Text, nullable=False, comment="用户id")  # 新增

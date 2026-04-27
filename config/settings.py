@@ -5,8 +5,9 @@
 """
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -46,12 +47,12 @@ class Settings(BaseSettings):
     database_echo: bool = Field(alias="DATABASE_ECHO")
 
     llm_provider: str = Field(alias="LLM_PROVIDER")
-    openai_api_key: str = Field(alias="OPENAI_API_KEY")
+    openai_api_key: SecretStr = Field(alias="OPENAI_API_KEY")
     openai_base_url: str = Field(alias="OPENAI_BASE_URL")
     openai_model: str = Field(alias="OPENAI_MODEL")
     openai_embedding_model: str = Field(alias="OPENAI_EMBEDDING_MODEL")
 
-    dashscope_api_key: str = Field(alias="DASHSCOPE_API_KEY")
+    dashscope_api_key: SecretStr = Field(alias="DASHSCOPE_API_KEY")
     qwen_model: str = Field(alias="QWEN_MODEL")
     qwen_embedding_model: str = Field(alias="QWEN_EMBEDDING_MODEL")
 
@@ -61,8 +62,29 @@ class Settings(BaseSettings):
     
     baidu_map_ak: str = Field(alias="BAIDU_MAP_AK")
 
+    # 👇 LangSmith 配置（可选，开启可观测性）
+    langchain_tracing_v2: bool = False
+    langchain_api_key: Optional[str] = None
+    langchain_project: str = Field(alias="LANGCHAIN_PROJECT")
+
+    # 新增 checkpointer 相关配置
+    checkpointer_uri: str = Field(alias="CHECKPOINTER_URI")  # 默认复用 database_url
+    enable_checkpointer: bool = True  # 是否启用检查点持久化
+
+    # 人机协同配置（敏感话题检测开关）
+    enable_sensitive_filter: bool = True  # 是否开启敏感话题检测
+    sensitive_keywords: Optional[str] = None  # 可选自定义敏感词列表（逗号分隔字符串）
+
+    # 长期记忆相关配置（跨端存储）
+    enable_long_memory: bool = True  # 是否开启长期记忆
+    long_memory_max_entries: int = 100  # 每用户最多存储的记忆条目数
+
+    # 可观测性配置（性能追踪与 debug）
+    enable_observability: bool = True  # 是否启用内置可观测性追踪
+    observability_log_level: str = "info"  # 追踪日志级别（debug/info）
+
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(Path(__file__).parent.parent / ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",

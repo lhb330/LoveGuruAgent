@@ -1,8 +1,3 @@
-"""通义千问LLM服务实现
-
-使用阿里云DashScope SDK调用通义千问模型。
-提供聊天生成和文本向量化功能。
-"""
 import dashscope
 
 from common.exceptions import LLMInvokeException
@@ -31,7 +26,7 @@ class QwenService(BaseLLMService):
         设置DashScope API密钥。
         """
         self.settings = get_settings()
-        dashscope.api_key = self.settings.dashscope_api_key
+        dashscope.api_key = self.settings.dashscope_api_key.get_secret_value()  # 修复：SecretStr 转字符串
 
     def invoke(self, prompt: str) -> str:
         """调用通义千问聊天模型生成回复

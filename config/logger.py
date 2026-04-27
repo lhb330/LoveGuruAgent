@@ -52,20 +52,20 @@ class DailyFileHandler(logging.FileHandler):
 
 def setup_logging(settings: Settings) -> None:
     """配置应用日志系统
-    
+
     创建日志目录并配置日志处理器：
     1. 控制台处理器：实时输出日志到终端
     2. 文件处理器：按天分割日志文件，格式为 app-yyyy-MM-dd.log
-    
+
     Args:
         settings: 应用配置实例，用于获取日志级别
-        
+
     Note:
         - 日志格式：时间 | 级别 | 模块名 | 消息
         - 文件路径：logs/app-yyyy-MM-dd.log
         - 每天自动生成新的日志文件
         - 自动避免重复添加处理器
-        
+
     Example:
         >>> settings = get_settings()
         >>> setup_logging(settings)
@@ -74,7 +74,7 @@ def setup_logging(settings: Settings) -> None:
     # 创建日志目录
     log_dir = Path("logs")
     log_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # 配置日志格式
     formatter = logging.Formatter(
         "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
@@ -102,3 +102,7 @@ def setup_logging(settings: Settings) -> None:
         file_handler = DailyFileHandler(log_dir, encoding="utf-8")
         file_handler.setFormatter(formatter)
         root.addHandler(file_handler)
+
+    # 抑制第三方库的冗余 INFO 日志
+    logging.getLogger("watchfiles").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
