@@ -43,8 +43,6 @@ class Settings(BaseSettings):
     app_port: int = Field(alias="APP_PORT")
     app_debug: bool = Field(alias="APP_DEBUG")
 
-    database_user: str = Field(alias="DATABASE_USER")
-    database_password: SecretStr = Field(alias="DATABASE_PASSWORD")
     database_url: str = Field(alias="DATABASE_URL")
     database_echo: bool = Field(alias="DATABASE_ECHO")
 
