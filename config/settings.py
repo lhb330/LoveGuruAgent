@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     app_port: int = Field(alias="APP_PORT")
     app_debug: bool = Field(alias="APP_DEBUG")
 
+    database_user: str = Field(alias="DATABASE_USER")
+    database_password: SecretStr = Field(alias="DATABASE_PASSWORD")
     database_url: str = Field(alias="DATABASE_URL")
     database_echo: bool = Field(alias="DATABASE_ECHO")
 
@@ -68,20 +70,27 @@ class Settings(BaseSettings):
     langchain_project: str = Field(alias="LANGCHAIN_PROJECT")
 
     # 新增 checkpointer 相关配置
-    checkpointer_uri: str = Field(alias="CHECKPOINTER_URI")  # 默认复用 database_url
-    enable_checkpointer: bool = True  # 是否启用检查点持久化
+    checkpointer_uri: str = Field(alias="CHECKPOINTER_URI")
+    # 是否启用检查点持久化
+    enable_checkpointer: bool = True
 
     # 人机协同配置（敏感话题检测开关）
-    enable_sensitive_filter: bool = True  # 是否开启敏感话题检测
-    sensitive_keywords: Optional[str] = None  # 可选自定义敏感词列表（逗号分隔字符串）
+    # 是否开启敏感话题检测
+    enable_sensitive_filter: bool = True
+    # 可选自定义敏感词列表（逗号分隔字符串）
+    sensitive_keywords: Optional[str] = None
 
     # 长期记忆相关配置（跨端存储）
-    enable_long_memory: bool = True  # 是否开启长期记忆
-    long_memory_max_entries: int = 100  # 每用户最多存储的记忆条目数
+    # 是否开启长期记忆
+    enable_long_memory: bool = True
+    # 每用户最多存储的记忆条目数
+    long_memory_max_entries: int = 100
 
     # 可观测性配置（性能追踪与 debug）
-    enable_observability: bool = True  # 是否启用内置可观测性追踪
-    observability_log_level: str = "info"  # 追踪日志级别（debug/info）
+    # 是否启用内置可观测性追踪
+    enable_observability: bool = True
+    # 追踪日志级别（debug/info）
+    observability_log_level: str = "info"
 
     model_config = SettingsConfigDict(
         env_file=str(Path(__file__).parent.parent / ".env"),
