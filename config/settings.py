@@ -84,6 +84,12 @@ class Settings(BaseSettings):
     # 每用户最多存储的记忆条目数
     long_memory_max_entries: int = 100
 
+    # 自我反思机制配置（Self-Correction）
+    # 是否开启自我反思（提升回复质量）
+    enable_self_reflection: bool = True
+    # 最大反思次数（避免无限循环）
+    max_reflection_count: int = 2
+
     # 可观测性配置（性能追踪与 debug）
     # 是否启用内置可观测性追踪
     enable_observability: bool = True

@@ -45,6 +45,9 @@ class ChatState(TypedDict, total=False):
         sensitive_keywords: 命中的敏感关键词列表
         long_term_memory: 长期记忆上下文文本
         chat_history: 当前会话的历史对话文本
+        reflection_count: 当前反思次数（用于限制最大反思轮数）
+        self_evaluation: 自我评估结果（审查节点的反馈）
+        need_regenerate: 是否需要重新生成回复
     """
     conversation_id: str
     user_id: str
@@ -56,6 +59,9 @@ class ChatState(TypedDict, total=False):
     sensitive_keywords: list[str]
     long_term_memory: str
     chat_history: str
+    reflection_count: int
+    self_evaluation: str
+    need_regenerate: bool
 
 
 def build_chat_graph(checkpointer: Optional[BaseCheckpointSaver] = None) -> CompiledStateGraph:
@@ -372,7 +378,109 @@ def build_chat_graph(checkpointer: Optional[BaseCheckpointSaver] = None) -> Comp
         return {
             "assistant_reply": full_response,
             "references": references,
+            "reflection_count": 0,  # 初始化反思计数
         }
+    
+    # ========== 自我反思节点（Self-Correction） ==========
+    def critic_node(state: ChatState) -> ChatState:
+        """自我审查节点 - 反思回复质量
+        
+        对生成的回复进行质量检查，确保：
+        1. 回复针对用户问题
+        2. 提供可执行的建议
+        3. 语气温暖且专业
+        4. 避免有害或不当建议
+        5. 引用了知识库内容
+        
+        如果质量不达标，标记需要重新生成。
+        最多反思2次，避免无限循环。
+        
+        Args:
+            state: 当前聊天状态
+            
+        Returns:
+            ChatState: 更新后的状态（包含审查结果）
+        """
+        from config.settings import get_settings
+        
+        settings = get_settings()
+        
+        # 检查是否启用反思机制
+        if not hasattr(settings, 'enable_self_reflection') or not settings.enable_self_reflection:
+            return {"need_regenerate": False, "self_evaluation": "反思机制未启用"}
+        
+        # 检查反思次数
+        reflection_count = state.get("reflection_count", 0)
+        max_reflections = getattr(settings, 'max_reflection_count', 2)
+        
+        if reflection_count >= max_reflections:
+            logger.info(f"已达到最大反思次数 ({max_reflections})，跳过审查")
+            return {"need_regenerate": False, "self_evaluation": "已达到最大反思次数"}
+        
+        user_message = state.get("user_message", "")
+        assistant_reply = state.get("assistant_reply", "")
+        references = state.get("references", [])
+        
+        # 构建反思 Prompt
+        reflection_prompt = PromptManager.build_reflection_prompt(
+            user_message=user_message,
+            assistant_reply=assistant_reply,
+            references=references,
+            reflection_count=reflection_count
+        )
+        
+        # 调用 LLM 进行审查
+        try:
+            llm_service = get_llm_service()
+            llm = llm_service.get_llm()
+            
+            evaluation_response = llm.invoke(reflection_prompt)
+            evaluation_text = evaluation_response.content if hasattr(evaluation_response, 'content') else str(evaluation_response)
+            
+            logger.info(f"自我审查结果: {evaluation_text[:200]}")
+            
+            # 解析审查结果（简单判断是否包含负面关键词）
+            need_regenerate = False
+            negative_keywords = ["需要改进", "不合格", "重新生成", "不够", "缺乏", "不适当"]
+            for keyword in negative_keywords:
+                if keyword in evaluation_text:
+                    need_regenerate = True
+                    break
+            
+            return {
+                "need_regenerate": need_regenerate,
+                "self_evaluation": evaluation_text,
+                "reflection_count": reflection_count + 1
+            }
+            
+        except Exception as e:
+            logger.error(f"自我审查失败: {str(e)}", exc_info=True)
+            # 审查失败时，默认通过
+            return {"need_regenerate": False, "self_evaluation": f"审查失败: {str(e)}"}
+    
+    def should_regenerate(state: ChatState) -> str:
+        """判断是否需要重新生成回复
+        
+        条件路由函数，根据审查结果决定下一步：
+        - 需要改进: 返回 generate_reply_stream 重新生成
+        - 通过审查: 结束流程
+        
+        Args:
+            state: 当前聊天状态
+            
+        Returns:
+            str: "regenerate" 或 "approve"
+        """
+        need_regenerate = state.get("need_regenerate", False)
+        reflection_count = state.get("reflection_count", 0)
+        max_reflections = getattr(get_settings(), 'max_reflection_count', 2)
+        
+        if need_regenerate and reflection_count < max_reflections:
+            logger.info(f"审查未通过，第 {reflection_count} 次重新生成")
+            return "regenerate"
+        else:
+            logger.info("审查通过或已达到最大反思次数")
+            return "approve"
     
     # 添加节点
     builder.add_node("sensitive_filter", sensitive_filter_node)
@@ -382,6 +490,7 @@ def build_chat_graph(checkpointer: Optional[BaseCheckpointSaver] = None) -> Comp
     builder.add_node("tools_result", tools_result_node)
     builder.add_node("generate_reply", generate_reply)
     builder.add_node("generate_reply_stream", generate_reply_stream)
+    builder.add_node("critic", critic_node)  # 自我反思节点
     
     # 设置入口点：先经过敏感词过滤
     builder.set_entry_point("sensitive_filter")
@@ -411,9 +520,19 @@ def build_chat_graph(checkpointer: Optional[BaseCheckpointSaver] = None) -> Comp
     # tools执行后 -> tools_result
     builder.add_edge("tools", "tools_result")
     
-    # 结束节点
-    builder.add_edge("tools_result", END)
-    builder.add_edge("generate_reply_stream", END)
+    # 反思机制：generate_reply_stream -> critic -> [regenerate | approve]
+    builder.add_edge("generate_reply_stream", "critic")
+    builder.add_edge("tools_result", "critic")  # 工具结果也需经过反思
+    
+    # 反思后的条件路由
+    builder.add_conditional_edges(
+        "critic",
+        should_regenerate,
+        {
+            "regenerate": "generate_reply_stream",  # 重新生成
+            "approve": END  # 通过审查，结束
+        }
+    )
     
     # 编译图，注入checkpointer实现持久执行
     compile_kwargs = {}
